@@ -1,17 +1,21 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open, save, ask } from '@tauri-apps/plugin-dialog';
 import { 
   FolderOpen, 
   Save, 
+  SaveAll,
   Search, 
   Eye, 
   EyeOff,
   FileCode,
   Settings,
-  Menu,
+  Wrench,
   Moon,
-  Sun
+  Sun,
+  FilePlus,
+  PanelLeftClose,
+  PanelLeftOpen
 } from 'lucide-react';
 
 import FileTree from './components/FileTree';
@@ -41,22 +45,45 @@ function App() {
   const [cursorLine, setCursorLine] = useState(1);
   const [cursorColumn, setCursorColumn] = useState(1);
   const [showFindReplace, setShowFindReplace] = useState(false);
-  const [showTools, setShowTools] = useState(false);
   const [showWhitespace, setShowWhitespace] = useState(false);
   const [showEncodingDialog, setShowEncodingDialog] = useState(false);
   const [showMarkdownPreview, setShowMarkdownPreview] = useState(false);
   const [selectedText] = useState('');
   const [isDarkTheme, setIsDarkTheme] = useState(true);
   const [showAbout, setShowAbout] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [showToolsPopup, setShowToolsPopup] = useState(false);
+  const toolsButtonRef = useRef<HTMLButtonElement>(null);
 
   // Get active file
   const activeFile = activeFileIndex >= 0 ? openFiles[activeFileIndex] : null;
+
+  // New file
+  const handleNewFile = useCallback(() => {
+    const newFile: OpenFile = {
+      path: '',
+      name: 'Untitled',
+      content: '',
+      originalContent: '',
+      encoding: 'UTF-8',
+      withBom: false,
+    };
+    setOpenFiles(prev => {
+      const newFiles = [...prev, newFile];
+      setActiveFileIndex(newFiles.length - 1);
+      return newFiles;
+    });
+  }, []);
 
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey) {
         switch (e.key.toLowerCase()) {
+          case 'n':
+            e.preventDefault();
+            handleNewFile();
+            break;
           case 'o':
             e.preventDefault();
             handleOpenFolder();
@@ -83,7 +110,7 @@ function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeFile, openFiles]);
+  }, [activeFile, openFiles, handleNewFile]);
 
   // Open folder
   const handleOpenFolder = useCallback(async () => {
@@ -156,6 +183,35 @@ function App() {
   const handleSave = useCallback(async () => {
     if (!activeFile) return;
     
+    // New file with no path: trigger Save As dialog
+    if (!activeFile.path) {
+      const savePath = await save({
+        defaultPath: activeFile.name || 'Untitled.txt',
+        filters: [
+          { name: 'All Files', extensions: ['*'] },
+          { name: 'Text Files', extensions: ['txt', 'md', 'json', 'yaml', 'xml'] },
+        ],
+      });
+      if (!savePath) return;
+      try {
+        await invoke('save_file_with_encoding', {
+          path: savePath,
+          content: activeFile.content,
+          encodingName: activeFile.encoding,
+          withBom: activeFile.withBom,
+        });
+        const newName = savePath.split(/[\\/]/).pop() || 'Untitled';
+        setOpenFiles(prev => prev.map((f, i) =>
+          i === activeFileIndex
+            ? { ...f, path: savePath, name: newName, originalContent: f.content }
+            : f
+        ));
+      } catch (err) {
+        alert('Failed to save file: ' + String(err));
+      }
+      return;
+    }
+
     try {
       await invoke('save_file_with_encoding', {
         path: activeFile.path,
@@ -262,6 +318,9 @@ function App() {
       {/* Menu Bar */}
       <div className="menu-bar">
         <div className="menu-section">
+          <button className="menu-button" onClick={handleNewFile} title="New File (Ctrl+N)">
+            <FilePlus size={18} />
+          </button>
           <button className="menu-button" onClick={handleOpenFolder} title="Open Folder (Ctrl+O)">
             <FolderOpen size={18} />
           </button>
@@ -283,7 +342,7 @@ function App() {
             disabled={!activeFile}
             title="Save As (Ctrl+Shift+S)"
           >
-            <span>Save As</span>
+            <SaveAll size={18} />
           </button>
           <div className="menu-divider" />
           <button 
@@ -311,11 +370,12 @@ function App() {
           )}
           <div className="menu-divider" />
           <button 
-            className={`menu-button ${showTools ? 'active' : ''}`}
-            onClick={() => setShowTools(!showTools)}
+            ref={toolsButtonRef}
+            className={`menu-button ${showToolsPopup ? 'active' : ''}`}
+            onClick={() => setShowToolsPopup(!showToolsPopup)}
             title="Tools"
           >
-            <Menu size={18} />
+            <Wrench size={18} />
           </button>
           <button 
             className="menu-button"
@@ -325,6 +385,13 @@ function App() {
             <Settings size={18} />
           </button>
           <div className="menu-divider" />
+          <button 
+            className="menu-button"
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            title={sidebarCollapsed ? 'Show Explorer' : 'Hide Explorer'}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+          </button>
           <button 
             className="menu-button"
             onClick={() => setIsDarkTheme(!isDarkTheme)}
@@ -339,7 +406,7 @@ function App() {
       {/* Main Content */}
       <div className="main-content">
         {/* Sidebar */}
-        {rootPath && (
+        {rootPath && !sidebarCollapsed && (
           <div className="sidebar">
             <div className="sidebar-header">
               <span className="sidebar-title">Explorer</span>
@@ -434,10 +501,12 @@ function App() {
         </div>
 
         {/* Tools Panel */}
-        {showTools && activeFile && (
+        {showToolsPopup && (
           <ToolsPanel
             selectedText={selectedText}
-            fullContent={activeFile.content}
+            fullContent={activeFile?.content || ''}
+            onClose={() => setShowToolsPopup(false)}
+            anchorRef={toolsButtonRef}
           />
         )}
 
@@ -467,7 +536,8 @@ function App() {
               <h3>About NotepadPure</h3>
             </div>
             <div className="dialog-body">
-              <p className="about-quote">"我们有时候真的只是需要一个纯粹的Notepad，仅此而已。"</p>
+              <p className="about-quote">"We only need a simple notepad, literally, then I made this with AI vibe coding. 
+                if you are interested, please check out at <a href="https://github.com/DonnieG/notepad-pure">Github: Notepad Pure</a>"</p>
               <p className="about-copyright">Powered by Donnie G.</p>
             </div>
             <div className="dialog-footer">

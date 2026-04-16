@@ -1,20 +1,52 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef, RefObject } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Wrench, Copy, Check } from 'lucide-react';
+import { Wrench, Copy, Check, X } from 'lucide-react';
 
 interface ToolsPanelProps {
   selectedText: string;
   fullContent: string;
+  onClose: () => void;
+  anchorRef: RefObject<HTMLButtonElement | null>;
 }
 
 type ToolTab = 'base64' | 'hash' | 'stats';
 
-const ToolsPanel: React.FC<ToolsPanelProps> = ({ selectedText, fullContent }) => {
+const ToolsPanel: React.FC<ToolsPanelProps> = ({ selectedText, fullContent, onClose, anchorRef }) => {
   const [activeTab, setActiveTab] = useState<ToolTab>('base64');
   const [base64Input, setBase64Input] = useState('');
   const [base64Output, setBase64Output] = useState('');
   const [hashOutput, setHashOutput] = useState({ md5: '', sha1: '', sha256: '' });
   const [copied, setCopied] = useState<string | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (
+        panelRef.current && !panelRef.current.contains(e.target as Node) &&
+        anchorRef.current && !anchorRef.current.contains(e.target as Node)
+      ) {
+        onClose();
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [onClose, anchorRef]);
+
+  // Position popup below the anchor button — computed once on mount, no flash
+  const popupStyle = React.useMemo<React.CSSProperties>(() => {
+    if (anchorRef.current) {
+      const rect = anchorRef.current.getBoundingClientRect();
+      return {
+        position: 'fixed',
+        top: rect.bottom + 6,
+        left: Math.max(8, rect.left - 260 + rect.width),
+        zIndex: 2000,
+      };
+    }
+    // Hidden off-screen until anchor is available (should not happen)
+    return { position: 'fixed', top: -9999, left: -9999, zIndex: 2000 };
+  }, [anchorRef]);
 
   const handleBase64Encode = useCallback(async () => {
     const text = selectedText || base64Input;
@@ -74,38 +106,37 @@ const ToolsPanel: React.FC<ToolsPanelProps> = ({ selectedText, fullContent }) =>
   const stats = getStats();
 
   return (
-    <div className="tools-panel">
-      <div className="tools-header">
-        <Wrench size={16} />
-        <span>Tools</span>
-      </div>
-      
-      <div className="tools-tabs">
-        <button
-          className={`tab ${activeTab === 'base64' ? 'active' : ''}`}
-          onClick={() => setActiveTab('base64')}
-        >
-          Base64
-        </button>
-        <button
-          className={`tab ${activeTab === 'hash' ? 'active' : ''}`}
-          onClick={() => setActiveTab('hash')}
-        >
-          Hash
-        </button>
-        <button
-          className={`tab ${activeTab === 'stats' ? 'active' : ''}`}
-          onClick={() => setActiveTab('stats')}
-        >
-          Stats
+    <div className="tools-popup" ref={panelRef} style={popupStyle}>
+      {/* Header */}
+      <div className="tools-popup-header">
+        <div className="tools-popup-title">
+          <Wrench size={14} />
+          <span>Tools</span>
+        </div>
+        <button className="icon-button close-button" onClick={onClose} title="Close">
+          <X size={14} />
         </button>
       </div>
-      
-      <div className="tools-content">
+
+      {/* Tabs */}
+      <div className="tools-popup-tabs">
+        {(['base64', 'hash', 'stats'] as ToolTab[]).map(tab => (
+          <button
+            key={tab}
+            className={`tools-popup-tab ${activeTab === tab ? 'active' : ''}`}
+            onClick={() => setActiveTab(tab)}
+          >
+            {tab === 'base64' ? 'Base64' : tab === 'hash' ? 'Hash' : 'Stats'}
+          </button>
+        ))}
+      </div>
+
+      {/* Content */}
+      <div className="tools-popup-content">
         {activeTab === 'base64' && (
           <div className="tool-section">
             <div className="tool-description">
-              {selectedText ? 'Using selected text' : 'Enter text to encode/decode'}
+              {selectedText ? 'Using selected text' : 'Enter text to encode / decode'}
             </div>
             {!selectedText && (
               <textarea
@@ -117,72 +148,46 @@ const ToolsPanel: React.FC<ToolsPanelProps> = ({ selectedText, fullContent }) =>
               />
             )}
             <div className="tool-buttons">
-              <button className="btn btn-small" onClick={handleBase64Encode}>
-                Encode
-              </button>
-              <button className="btn btn-small" onClick={handleBase64Decode}>
-                Decode
-              </button>
+              <button className="btn btn-small btn-primary" onClick={handleBase64Encode}>Encode</button>
+              <button className="btn btn-small btn-secondary" onClick={handleBase64Decode}>Decode</button>
             </div>
             {base64Output && (
               <div className="tool-output">
                 <pre>{base64Output}</pre>
-                <button
-                  className="copy-btn"
-                  onClick={() => copyToClipboard(base64Output, 'base64')}
-                >
-                  {copied === 'base64' ? <Check size={14} /> : <Copy size={14} />}
+                <button className="copy-btn" onClick={() => copyToClipboard(base64Output, 'base64')} title="Copy">
+                  {copied === 'base64' ? <Check size={13} /> : <Copy size={13} />}
                 </button>
               </div>
             )}
           </div>
         )}
-        
+
         {activeTab === 'hash' && (
           <div className="tool-section">
             <div className="tool-description">
               {selectedText ? 'Hash of selected text' : 'Hash of entire document'}
             </div>
-            <button className="btn btn-primary" onClick={handleCalculateHash}>
-              Calculate Hash
-            </button>
+            <button className="btn btn-primary" onClick={handleCalculateHash}>Calculate Hash</button>
             {hashOutput.md5 && (
               <div className="hash-results">
-                <div className="hash-item">
-                  <span className="hash-label">MD5:</span>
-                  <code className="hash-value">{hashOutput.md5}</code>
-                  <button
-                    className="copy-btn"
-                    onClick={() => copyToClipboard(hashOutput.md5, 'md5')}
-                  >
-                    {copied === 'md5' ? <Check size={14} /> : <Copy size={14} />}
-                  </button>
-                </div>
-                <div className="hash-item">
-                  <span className="hash-label">SHA1:</span>
-                  <code className="hash-value">{hashOutput.sha1}</code>
-                  <button
-                    className="copy-btn"
-                    onClick={() => copyToClipboard(hashOutput.sha1, 'sha1')}
-                  >
-                    {copied === 'sha1' ? <Check size={14} /> : <Copy size={14} />}
-                  </button>
-                </div>
-                <div className="hash-item">
-                  <span className="hash-label">SHA256:</span>
-                  <code className="hash-value">{hashOutput.sha256}</code>
-                  <button
-                    className="copy-btn"
-                    onClick={() => copyToClipboard(hashOutput.sha256, 'sha256')}
-                  >
-                    {copied === 'sha256' ? <Check size={14} /> : <Copy size={14} />}
-                  </button>
-                </div>
+                {[
+                  { label: 'MD5', value: hashOutput.md5, key: 'md5' },
+                  { label: 'SHA1', value: hashOutput.sha1, key: 'sha1' },
+                  { label: 'SHA256', value: hashOutput.sha256, key: 'sha256' },
+                ].map(({ label, value, key }) => (
+                  <div className="hash-item" key={key}>
+                    <span className="hash-label">{label}</span>
+                    <code className="hash-value">{value}</code>
+                    <button className="copy-btn" onClick={() => copyToClipboard(value, key)} title="Copy">
+                      {copied === key ? <Check size={13} /> : <Copy size={13} />}
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
           </div>
         )}
-        
+
         {activeTab === 'stats' && (
           <div className="tool-section">
             <div className="stats-grid">
@@ -201,11 +206,11 @@ const ToolsPanel: React.FC<ToolsPanelProps> = ({ selectedText, fullContent }) =>
               {stats.selectedChars > 0 && (
                 <>
                   <div className="stat-item selected">
-                    <span className="stat-label">Selected Chars</span>
+                    <span className="stat-label">Sel. Chars</span>
                     <span className="stat-value">{stats.selectedChars.toLocaleString()}</span>
                   </div>
                   <div className="stat-item selected">
-                    <span className="stat-label">Selected Words</span>
+                    <span className="stat-label">Sel. Words</span>
                     <span className="stat-value">{stats.selectedWords.toLocaleString()}</span>
                   </div>
                 </>
